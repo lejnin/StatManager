@@ -75,9 +75,12 @@ function ShowMenu( screenPosition, menu, parent, isSubMenu )
 end
 
 function DestroyMenu( menuWidget )
-	local childMenu = Actions[ menuWidget:GetInstanceId() ].childMenu
-	if childMenu then
-		DestroyMenu( childMenu )
+	local action = Actions[ menuWidget:GetInstanceId() ]
+	if not action then
+		return
+	end
+	if action.childMenu then
+		DestroyMenu( action.childMenu )
 	end
 
 	ClearActions( menuWidget )
