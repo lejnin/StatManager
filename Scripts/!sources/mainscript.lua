@@ -11,6 +11,7 @@ local RenameMenuIndex = nil
 
 local m_menuDesc = GetWdgDesc("SaveBuildTemplate")
 local m_quickBtnDesc = GetWdgDesc("QuickBuildButton")
+local m_quickLabelEditDesc = GetWdgDesc("QuickLabelEdit")
 
 ----------------------------------------------------------------------------------------------------
 -- AOPanel support
@@ -66,7 +67,8 @@ end
 ----------------------------------------------------------------------------------------------------
 -- Quick build buttons (draggable on-screen buttons that load a single build)
 -- build.quickId (number) - stable id of the build, assigned on first pin, never reused
--- pins are per character (avatar config "QuickButtons"): quickId -> { pinned = true, posX, posY, highPosX, highPosY }
+-- pins follow the addon storage mode (/statsaveglobal, /statsaveavatar): global or per character config "QuickButtons"
+-- pin: quickId -> { pinned = true, label, posX, posY, highPosX, highPosY }
 
 local m_quickButtons = {} -- quickId -> widget
 local m_quickButtonsHidden = false
@@ -75,11 +77,19 @@ local QUICK_BTN_PREFIX = "QuickBuild"
 local QUICK_ID_COUNTER = "QuickIdCounter"
 
 local function SavePins()
-	userMods.SetAvatarConfigSection( "QuickButtons", m_pins )
+	if IsSaveGlobal() then
+		userMods.SetGlobalConfigSection( "QuickButtons", m_pins )
+	else
+		userMods.SetAvatarConfigSection( "QuickButtons", m_pins )
+	end
 end
 
 local function LoadPins()
-	m_pins = userMods.GetAvatarConfigSection( "QuickButtons" ) or {}
+	if IsSaveGlobal() then
+		m_pins = userMods.GetGlobalConfigSection( "QuickButtons" ) or {}
+	else
+		m_pins = userMods.GetAvatarConfigSection( "QuickButtons" ) or {}
+	end
 end
 
 local function GetQuickButtonWidth(aName)
@@ -119,10 +129,17 @@ function IsBuildPinned(aBuild)
 	return aBuild.quickId ~= nil and m_pins[aBuild.quickId] ~= nil
 end
 
+-- custom label of the button, or build name
+local function GetQuickLabel(aBuild)
+	local pin = aBuild.quickId and m_pins[aBuild.quickId]
+	return pin and pin.label or aBuild.name or ""
+end
+
 local function UpdateQuickButtonLabel(aWdg, aBuild)
-	aWdg:SetVal("button_label", userMods.ToWString(aBuild.name or ""))
+	local label = GetQuickLabel(aBuild)
+	aWdg:SetVal("button_label", userMods.ToWString(label))
 	local place = aWdg:GetPlacementPlain()
-	place.sizeX = GetQuickButtonWidth(aBuild.name or "")
+	place.sizeX = GetQuickButtonWidth(label)
 	aWdg:SetPlacementPlain(place)
 end
 
@@ -165,6 +182,9 @@ end
 function DestroyQuickButton(aQuickId)
 	local wdg = aQuickId and m_quickButtons[aQuickId]
 	if wdg then
+		if IsQuickLabelEditing(aQuickId) then
+			CancelQuickLabelEdit()
+		end
 		DnD.Remove(wdg)
 		wdg:DestroyWidget()
 		m_quickButtons[aQuickId] = nil
@@ -244,7 +264,122 @@ function CreateAllQuickButtons()
 	end
 end
 
+----------------------------------------------------------------------------------------------------
+-- Quick button label editing (right click on the button)
+
+local m_labelEdit = nil      -- edit widget
+local m_labelEditId = nil    -- quickId of the button being edited
+local LABEL_EDIT_WIDTH = 200
+
+local function GetQuickIdByWidget(aWdg)
+	return tonumber(string.match(aWdg:GetName(), "^"..QUICK_BTN_PREFIX.."(%d+)$"))
+end
+
+function IsQuickLabelEditing(aQuickId)
+	return m_labelEditId ~= nil and (aQuickId == nil or m_labelEditId == aQuickId)
+end
+
+-- clears state before destroying: losing focus triggers onQuickLabelFocus
+local function CloseQuickLabelEdit()
+	local quickId = m_labelEditId
+	local edit = m_labelEdit
+	m_labelEditId = nil
+	m_labelEdit = nil
+	if edit and edit:IsValid() then
+		edit:DestroyWidget()
+	end
+	-- restore normal label and width
+	local build = quickId and FindBuildByQuickId(quickId)
+	if build then
+		RefreshQuickButton(build)
+	end
+end
+
+function CancelQuickLabelEdit()
+	if IsQuickLabelEditing() then
+		CloseQuickLabelEdit()
+	end
+end
+
+local function AcceptQuickLabelEdit()
+	if not IsQuickLabelEditing() then
+		return
+	end
+	local pin = m_pins[m_labelEditId]
+	local build = FindBuildByQuickId(m_labelEditId)
+	if pin and build and m_labelEdit and m_labelEdit:IsValid() then
+		local text = userMods.FromWString( m_labelEdit:GetText() )
+		text = string.gsub( string.gsub( text, "^%s+", "" ), "%s+$", "" )
+		if text == "" or text == build.name then
+			pin.label = nil
+		else
+			pin.label = text
+		end
+		SavePins()
+	end
+	CloseQuickLabelEdit()
+end
+
+function onQuickBuildRightClick(params)
+	if DnD:IsDragging() then
+		return
+	end
+	local quickId = GetQuickIdByWidget(params.widget)
+	local build = quickId and FindBuildByQuickId(quickId)
+	if not build then
+		return
+	end
+	if IsQuickLabelEditing() then
+		local sameButton = IsQuickLabelEditing(quickId)
+		AcceptQuickLabelEdit()
+		if sameButton then
+			return
+		end
+	end
+	HideMainMenu()
+
+	local btn = m_quickButtons[quickId]
+	btn:SetVal("button_label", common.GetEmptyWString())
+	local place = btn:GetPlacementPlain()
+	place.sizeX = math.max(place.sizeX, LABEL_EDIT_WIDTH)
+	btn:SetPlacementPlain(place)
+
+	local edit = mainForm:CreateChildByDesc(m_quickLabelEditDesc)
+	local editPlace = edit:GetPlacementPlain()
+	editPlace.posX = place.posX + 8
+	editPlace.posY = place.posY
+	editPlace.sizeX = place.sizeX - 16
+	editPlace.sizeY = place.sizeY
+	edit:SetPlacementPlain(editPlace)
+	edit:SetText(userMods.ToWString(GetQuickLabel(build)))
+	edit:Show(true)
+	edit:Enable(true)
+	edit:SetFocus(true)
+
+	m_labelEdit = edit
+	m_labelEditId = quickId
+end
+
+function onQuickLabelAccept(params)
+	AcceptQuickLabelEdit()
+end
+
+function onQuickLabelCancel(params)
+	CancelQuickLabelEdit()
+end
+
+function onQuickLabelFocus(params)
+	if not params.active then
+		AcceptQuickLabelEdit()
+	end
+end
+
+----------------------------------------------------------------------------------------------------
+
 function ShowQuickButtons(aShow)
+	if not aShow then
+		CancelQuickLabelEdit()
+	end
 	m_quickButtonsHidden = not aShow
 	for _, wdg in pairs(m_quickButtons) do
 		wdg:Show(aShow)
@@ -255,7 +390,10 @@ function onQuickBuild(params)
 	if DnD:IsDragging() then
 		return
 	end
-	local quickId = tonumber(string.match(params.widget:GetName(), "^"..QUICK_BTN_PREFIX.."(%d+)$"))
+	if IsQuickLabelEditing() then
+		AcceptQuickLabelEdit()
+	end
+	local quickId = GetQuickIdByWidget(params.widget)
 	local build = quickId and FindBuildByQuickId(quickId)
 	if build then
 		HideMainMenu()
@@ -759,6 +897,10 @@ function Init()
 	common.RegisterReactionHandler( onRenameAccept, "RenameBuildReaction" )
 	common.RegisterReactionHandler( onRenameFocus, "RenameFocusChanged" )
 	common.RegisterReactionHandler( onQuickBuild, "QuickBuildReaction" )
+	common.RegisterReactionHandler( onQuickBuildRightClick, "QuickBuildRightClick" )
+	common.RegisterReactionHandler( onQuickLabelAccept, "QuickLabelAcceptReaction" )
+	common.RegisterReactionHandler( onQuickLabelCancel, "QuickLabelCancelReaction" )
+	common.RegisterReactionHandler( onQuickLabelFocus, "QuickLabelFocusChanged" )
 
 	common.RegisterEventHandler( OnDndPick, "EVENT_DND_PICK_ATTEMPT" )
 	

@@ -22,6 +22,7 @@
 	<Variants>
 		<Item>
 			<Reaction>QuickBuildReaction</Reaction>
+			<ReactionRightClick>QuickBuildRightClick</ReactionRightClick>
 			<StateNormal>
 				<FormatFileRef href="QuickBuildButtonText.txt" />
 			</StateNormal>

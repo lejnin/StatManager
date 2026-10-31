@@ -25,6 +25,10 @@
 			<name>QuickBuildButton</name>
 			<widget href="QuickBuildButton/QuickBuildButton.(WidgetButton).xdb" />
 		</Item>
+		<Item>
+			<name>QuickLabelEdit</name>
+			<widget href="Menu/Widgets/QuickLabelEdit.(WidgetEditLine).xdb" />
+		</Item>
 	</items>
 </UIRelatedWidgets>
 
