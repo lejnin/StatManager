@@ -31,6 +31,9 @@ local m_lastDefenceInsigniaID = nil
 local m_lastOffenceInsigniaIndex = nil
 local m_lastDefenceInsigniaIndex = nil
 local m_changedItemOnTick = {}
+local m_unsupportedEquipWarned = false
+local m_missingOffenceWarned = false
+local m_missingDefenceWarned = false
 
 local m_locale = getLocale()
 ----------------------------------------------------------------------------------------------------
@@ -51,12 +54,6 @@ function SetSaveGlobal(aValue)
 	userMods.SetGlobalConfigSection( "StatManger_free_use_global", { value = aValue } )
 end
 
-function IsFirstStart()
-	if not userMods.GetAvatarConfigSection( "StatBuilds" ) and not userMods.GetGlobalConfigSection( "StatBuilds" ) then
-		return true
-	end
-end
-
 function SaveBuildsTable()
 	if (IsSaveGlobal()) then
 		userMods.SetGlobalConfigSection( "StatBuilds", BuildsTable )
@@ -73,22 +70,24 @@ function LoadBuildsTable()
 	end
 
 	if not BuildsTable then
-	--[[ --при нескольких аккаунтах/аватарх мы не сможем однозначно сказать, чистая это
-	--при "чистой" установке включаем режим глобального хранения
-		if IsFirstStart() then
-			SetSaveGlobal(true)
-		end]]
 		BuildsTable = {}
 	end
 end
 
 ----------------------------------------------------------------------------------------------------
 
+function GetAvatarClass()
+	if avatar.IsExist and not avatar.IsExist() then
+		return nil
+	end
+	local avatarClass = avatar.GetClass()
+	return clTable[avatarClass] or avatarClass
+end
 
 function SaveCurrentBuild( name )
 	local build = {}
 	build.name = name
-	build.class =  clTable[avatar.GetClass()]
+	build.class = GetAvatarClass()
 	SaveStatBuild( build )
 
 	table.insert( BuildsTable, build )
@@ -96,7 +95,7 @@ function SaveCurrentBuild( name )
 end
 
 function UpdateBuild( index )
-	BuildsTable[ index ].class = clTable[avatar.GetClass()]
+	BuildsTable[ index ].class = GetAvatarClass()
 	SaveStatBuild( BuildsTable[ index ] )
 
 	SaveBuildsTable()
@@ -112,8 +111,11 @@ function LoadBuild( aBuild )
 	m_lastDefenceInsigniaID = nil
 	m_lastOffenceInsigniaIndex = nil
 	m_lastDefenceInsigniaIndex = nil
+	m_unsupportedEquipWarned = false
+	m_missingOffenceWarned = false
+	m_missingDefenceWarned = false
 
-	LoadBuildInternal(aBuild, true)
+	LoadBuildInternal(aBuild)
 end
 
 function StopLoadBuild()
@@ -149,18 +151,6 @@ function OnItemChanged(aParam)
 	end
 end
 
-local function GetItemTier(anItemId)
-	local category = itemLib.GetCategory(anItemId)
-	local categoryInfo = category and itemLib.GetCategoryInfo(category)
-	local tier = categoryInfo and categoryInfo.sysName and string.match(categoryInfo.sysName, 'Tier(%d+)') -- sysName = 'Tier03'
-	return tier and tonumber(tier) or -1
-end
-
-local function CheckTier(anItemId)
-	return true
-	--return GetItemTier(anItemId) < 3
-end
-
 function LoadBuildInternal( aBuild )
 	LastActivityTime = GetTimestamp()
 	if IsPlayerInCombat() then
@@ -170,9 +160,10 @@ function LoadBuildInternal( aBuild )
 	end
 	local myDressedSlots = unit.GetEquipmentItemIds(avatar.GetId(), ITEM_CONT_EQUIPMENT)
 	m_changedItemOnTick = {}
+	local insigniaMissing = false
 	for i = 0, DRESS_SLOT_UNDRESSABLE-1 do
 		local dressedItemID = myDressedSlots[i]
-		if aBuild.stats[i] and dressedItemID and CheckTier(dressedItemID) then
+		if aBuild.stats and aBuild.stats[i] and dressedItemID then
 			local neededOffenceStatId = aBuild.stats[i][ENUM_SpecialStatType_Offence]
 			local neededDefenceStatId = aBuild.stats[i][ENUM_SpecialStatType_Defence]
 			local bonus = itemLib.GetBonus(dressedItemID)
@@ -191,7 +182,11 @@ function LoadBuildInternal( aBuild )
 							m_changedItemOnTick[dressedItemID] = false
 						end
 					else 
-						LogToChat(m_locale["missingAttackInsignia"], "warning")
+						insigniaMissing = true
+						if not m_missingOffenceWarned then
+							m_missingOffenceWarned = true
+							LogToChat(m_locale["missingAttackInsignia"], "warning")
+						end
 					end
 					--иногда при смене одновременно атакующей и защитной стат они меняются сервером в разное время, поэтому крутим по одной
 					if m_changedItemOnTick[dressedItemID] == nil then
@@ -200,7 +195,11 @@ function LoadBuildInternal( aBuild )
 								m_changedItemOnTick[dressedItemID] = false
 							end
 						else 
-							LogToChat(m_locale["missingDefenseInsignia"], "warning")
+							insigniaMissing = true
+							if not m_missingDefenceWarned then
+								m_missingDefenceWarned = true
+								LogToChat(m_locale["missingDefenseInsignia"], "warning")
+							end
 						end
 					end
 				end
@@ -219,7 +218,9 @@ function LoadBuildInternal( aBuild )
 	
 	if GetTableSize(m_changedItemOnTick) == 0 then
 		IsLoadingNow = false
-		LogToChat(m_locale["workDone"])
+		if not insigniaMissing then
+			LogToChat(m_locale["workDone"])
+		end
 	end
 end
 
@@ -261,7 +262,8 @@ function ResetTryCnt()
 end
 
 function GetStatByType(aSpecStat, aType)
-	if GetTableSize(aSpecStat) > 3 then
+	if GetTableSize(aSpecStat) > 3 and not m_unsupportedEquipWarned then
+		m_unsupportedEquipWarned = true
 		--не тир3 а что-то новое, выведем предупреждение, возможно потребуется др механизм
 		LogToChat(m_locale["unsuportedEquip"], "error")
 	end
@@ -335,14 +337,12 @@ end
 
 function SaveStatBuild(aBuilds)
 	aBuilds.stats = {}
+	m_unsupportedEquipWarned = false
 
 	local myDressedSlots = unit.GetEquipmentItemIds(avatar.GetId(), ITEM_CONT_EQUIPMENT)
 	
 	for i = 0, DRESS_SLOT_UNDRESSABLE-1 do
 		local dressedItemID = myDressedSlots[i]
-		aBuilds.stats[i] = nil;
-		
-		
 		if dressedItemID then
 			local bonus = itemLib.GetBonus(dressedItemID)
 			if bonus and bonus.specStats then

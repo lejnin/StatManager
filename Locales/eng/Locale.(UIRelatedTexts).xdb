@@ -53,5 +53,13 @@
       <name>workStart</name>
       <resource href="workStart.txt"/>
     </Item>
+	<Item>
+      <name>quickBtnAdd</name>
+      <resource href="quickBtnAdd.txt"/>
+    </Item>
+	<Item>
+      <name>quickBtnRemove</name>
+      <resource href="quickBtnRemove.txt"/>
+    </Item>
   </items>
 </UIRelatedTexts>

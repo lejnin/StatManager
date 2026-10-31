@@ -1,4 +1,4 @@
-﻿Global("Locales", {})
+Global("Locales", {})
 Global("LocalesInited", false)
 Global( "g_offensiveItems", {} )
 Global( "g_defensiveItems", {} )

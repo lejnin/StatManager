@@ -2,11 +2,15 @@ Global( "g_lastAoPanelParams", nil )
 
 local ListInClassMode = false
 local ListButton = mainForm:GetChildChecked( "ListButton", false )
-ListButton:SetVal("button_label", userMods.ToWString( ListInClassMode and "Sc" or "S" )) 
 
 local m_currentMenu = nil
 
+-- rename state (declared here: used by HideMainMenu)
+local RenameBuildIndex = nil
+local RenameMenuIndex = nil
+
 local m_menuDesc = GetWdgDesc("SaveBuildTemplate")
+local m_quickBtnDesc = GetWdgDesc("QuickBuildButton")
 
 ----------------------------------------------------------------------------------------------------
 -- AOPanel support
@@ -60,8 +64,207 @@ end
 
 
 ----------------------------------------------------------------------------------------------------
+-- Quick build buttons (draggable on-screen buttons that load a single build)
+-- build.quickId (number) - stable id of the build, assigned on first pin, never reused
+-- pins are per character (avatar config "QuickButtons"): quickId -> { pinned = true, posX, posY, highPosX, highPosY }
 
-local BuildsMenu = nil
+local m_quickButtons = {} -- quickId -> widget
+local m_quickButtonsHidden = false
+local m_pins = {}
+local QUICK_BTN_PREFIX = "QuickBuild"
+local QUICK_ID_COUNTER = "QuickIdCounter"
+
+local function SavePins()
+	userMods.SetAvatarConfigSection( "QuickButtons", m_pins )
+end
+
+local function LoadPins()
+	m_pins = userMods.GetAvatarConfigSection( "QuickButtons" ) or {}
+end
+
+local function GetQuickButtonWidth(aName)
+	-- counts chars both for utf-8 and cp1251 strings (skip utf-8 continuation bytes)
+	local cnt = 0
+	for i = 1, string.len(aName) do
+		local b = string.byte(aName, i)
+		if b < 128 or b > 191 then
+			cnt = cnt + 1
+		end
+	end
+	return math.min(math.max(cnt * 8 + 24, 32), 240)
+end
+
+-- global counter, so an id of a deleted build is never given to another one
+local function GetFreeQuickId()
+	local maxId = GetConfig( QUICK_ID_COUNTER ) or 0
+	for _, build in ipairs(BuildsTable) do
+		if type(build) == "table" and build.quickId and build.quickId > maxId then
+			maxId = build.quickId
+		end
+	end
+	maxId = maxId + 1
+	SetConfig( QUICK_ID_COUNTER, maxId )
+	return maxId
+end
+
+local function FindBuildByQuickId(aQuickId)
+	for _, build in ipairs(BuildsTable) do
+		if type(build) == "table" and build.quickId == aQuickId then
+			return build
+		end
+	end
+end
+
+function IsBuildPinned(aBuild)
+	return aBuild.quickId ~= nil and m_pins[aBuild.quickId] ~= nil
+end
+
+local function UpdateQuickButtonLabel(aWdg, aBuild)
+	aWdg:SetVal("button_label", userMods.ToWString(aBuild.name or ""))
+	local place = aWdg:GetPlacementPlain()
+	place.sizeX = GetQuickButtonWidth(aBuild.name or "")
+	aWdg:SetPlacementPlain(place)
+end
+
+function CreateQuickButton(aBuild)
+	if not IsBuildPinned(aBuild) or m_quickButtons[aBuild.quickId] then
+		return
+	end
+	local pin = m_pins[aBuild.quickId]
+	local wdg = mainForm:CreateChildByDesc(m_quickBtnDesc)
+	wdg:SetName(QUICK_BTN_PREFIX..aBuild.quickId)
+	UpdateQuickButtonLabel(wdg, aBuild)
+	local place = wdg:GetPlacementPlain()
+	if pin.posX then
+		place.posX = pin.posX
+		place.posY = pin.posY
+		place.highPosX = pin.highPosX or place.highPosX
+		place.highPosY = pin.highPosY or place.highPosY
+	else
+		-- default position: under the main button, stacked by count
+		place.posX = 0
+		place.posY = 34 * (GetTableSize(m_quickButtons) + 1)
+	end
+	wdg:SetPlacementPlain(place)
+	-- position is stored in the pin (not in LibDnD config), so it is removed together with the pin
+	DnD.Init(wdg, wdg, false)
+	DnD.SetDropCallback(wdg, function(aPlace)
+		local currPin = m_pins[aBuild.quickId]
+		if currPin then
+			currPin.posX = aPlace.posX
+			currPin.posY = aPlace.posY
+			currPin.highPosX = aPlace.highPosX
+			currPin.highPosY = aPlace.highPosY
+			SavePins()
+		end
+	end)
+	m_quickButtons[aBuild.quickId] = wdg
+	wdg:Show(not m_quickButtonsHidden)
+end
+
+function DestroyQuickButton(aQuickId)
+	local wdg = aQuickId and m_quickButtons[aQuickId]
+	if wdg then
+		DnD.Remove(wdg)
+		wdg:DestroyWidget()
+		m_quickButtons[aQuickId] = nil
+	end
+end
+
+function RefreshQuickButton(aBuild)
+	local wdg = aBuild.quickId and m_quickButtons[aBuild.quickId]
+	if wdg then
+		UpdateQuickButtonLabel(wdg, aBuild)
+	end
+end
+
+-- called before a build is deleted
+function UnpinBuild(aBuild)
+	if aBuild.quickId then
+		DestroyQuickButton(aBuild.quickId)
+		if m_pins[aBuild.quickId] then
+			m_pins[aBuild.quickId] = nil
+			SavePins()
+		end
+	end
+end
+
+function ToggleQuickButton(aBuild)
+	if IsBuildPinned(aBuild) then
+		UnpinBuild(aBuild)
+	else
+		if not aBuild.quickId then
+			aBuild.quickId = GetFreeQuickId()
+			SaveBuildsTable()
+		end
+		m_pins[aBuild.quickId] = { pinned = true }
+		SavePins()
+		CreateQuickButton(aBuild)
+	end
+	onShowList(g_lastAoPanelParams)
+	onShowList(g_lastAoPanelParams)
+end
+
+-- removes positions saved by LibDnD in the first version of quick buttons
+local function CleanupLegacyDnDConfig()
+	local cfg = GetConfig()
+	if not cfg then
+		return
+	end
+	local changed = false
+	for key in pairs(cfg) do
+		if type(key) == "string" and string.find(key, "^DnD:.*%."..QUICK_BTN_PREFIX.."%d+$") then
+			cfg[key] = nil
+			changed = true
+		end
+	end
+	if changed then
+		userMods.SetGlobalConfigSection( common.GetAddonName(), cfg )
+	end
+end
+
+function CreateAllQuickButtons()
+	CleanupLegacyDnDConfig()
+	LoadPins()
+	-- drop pins of builds deleted on another character
+	local changed = false
+	for quickId in pairs(m_pins) do
+		if not FindBuildByQuickId(quickId) then
+			m_pins[quickId] = nil
+			changed = true
+		end
+	end
+	if changed then
+		SavePins()
+	end
+	for _, build in ipairs(BuildsTable) do
+		if type(build) == "table" then
+			CreateQuickButton(build)
+		end
+	end
+end
+
+function ShowQuickButtons(aShow)
+	m_quickButtonsHidden = not aShow
+	for _, wdg in pairs(m_quickButtons) do
+		wdg:Show(aShow)
+	end
+end
+
+function onQuickBuild(params)
+	if DnD:IsDragging() then
+		return
+	end
+	local quickId = tonumber(string.match(params.widget:GetName(), "^"..QUICK_BTN_PREFIX.."(%d+)$"))
+	local build = quickId and FindBuildByQuickId(quickId)
+	if build then
+		HideMainMenu()
+		LoadBuild(build)
+	end
+end
+
+----------------------------------------------------------------------------------------------------
+
 local ClassMenu = nil
 local Localization = getLocale()
 
@@ -98,19 +301,56 @@ function getBuildIndexByClass( aBuild )
 end
 
 function HideMainMenu()
+	RenameBuildIndex = nil
+	RenameMenuIndex = nil
 	if ClassMenu and ClassMenu:IsValid() then
 		DestroyMenu( ClassMenu )
 		ClassMenu = nil 
 	end
 end
 
+local UNKNOWN_CLASS = "?"
+
+local function GetBuildClassKey(aBuild)
+	return aBuild.class or UNKNOWN_CLASS
+end
+
+-- sorted list of classes that have at least one build
+local function GetBuildClasses()
+	local found = {}
+	local classes = {}
+	for _, v in ipairs( BuildsTable ) do
+		if type(v) == "table" then
+			local classKey = GetBuildClassKey(v)
+			if not found[classKey] then
+				found[classKey] = true
+				table.insert( classes, classKey )
+			end
+		end
+	end
+	table.sort( classes )
+	return classes
+end
+
 function CreateSubMenu(ClassName)
 	local SubMenu = {}
-	for i, v in ipairs( BuildsTable ) do
+	for _, v in ipairs( BuildsTable ) do
 		if type(v) == "table" then
-			local build = BuildsTable[i]
-			if ClassName == nil or v.class== clTable[ClassName] then
+			local build = v
+			if ClassName == nil or GetBuildClassKey(v) == ClassName then
 				local MenuName = v.name 
+				
+				local buildSubMenu = {
+					{ name = Localization["rename"],
+						onActivate = function() onRenameBuild( build ) end },
+					{ name = Localization["delete"],
+						onActivate = function() UnpinBuild( build ); DeleteBuild( getBuildIndex( build ) ); onShowList(g_lastAoPanelParams); onShowList(g_lastAoPanelParams) end },
+					{ name = Localization["update"],
+						onActivate = function() UpdateBuild( getBuildIndex( build ) ) end },
+				}
+				table.insert( buildSubMenu, {
+					name = IsBuildPinned( build ) and Localization["quickBtnRemove"] or Localization["quickBtnAdd"],
+					onActivate = function() ToggleQuickButton( build ) end } )
 					
 				table.insert( SubMenu, {
 					name = userMods.ToWString( MenuName ),
@@ -121,14 +361,7 @@ function CreateSubMenu(ClassName)
 						LoadBuild( build ) 
 						HideMainMenu()
 					end,
-					submenu = {
-						{ name = Localization["rename"],
-							onActivate = function() onRenameBuild( build ) end },
-						{ name = Localization["delete"],
-							onActivate = function() DeleteBuild( getBuildIndex( build ) ); onShowList(g_lastAoPanelParams); onShowList(g_lastAoPanelParams) end },
-						{ name = Localization["update"],
-							onActivate = function() UpdateBuild( getBuildIndex( build ) ) end },
-					}
+					submenu = buildSubMenu
 				})
 			end
 		end
@@ -145,10 +378,10 @@ function onShowList( params )
 		local menu = {}
 		
 		if ListInClassMode then
-			for i, v in pairs( clTable ) do
-				local SubMenus = CreateSubMenu(i)
-			 	if table.getn(SubMenus) > 0 then table.insert( menu, { name = userMods.ToWString(v),submenu = SubMenus} ) end
-			end		
+			for _, classKey in ipairs( GetBuildClasses() ) do
+				local SubMenus = CreateSubMenu(classKey)
+				if table.getn(SubMenus) > 0 then table.insert( menu, { name = userMods.ToWString(classKey), submenu = SubMenus } ) end
+			end
 		else
 			menu = CreateSubMenu(nil)
 		end
@@ -161,7 +394,7 @@ function onShowList( params )
 		else
 			ClassMenu = ShowMenu( { x = params and params.x or 0, y = 32 }, menu )
 		end
-		ClassMenu:GetChildChecked( "SaveBuildTemplate", false ):GetChildChecked( "BuildNameEdit", false ):SetFocus( true )
+		SetSaveEditFocus( true )
 		m_currentMenu = menu
 	else
 		HideMainMenu()
@@ -171,11 +404,27 @@ end
 ----------------------------------------------------------------------------------------------------
 -- Renaming
 
-local RenameBuildIndex = nil
-local RenameMenuIndex = nil
+-- menu that holds build items: top menu, or opened class submenu in class mode
+function GetBuildsMenuWidget()
+	if not ClassMenu or not ClassMenu:IsValid() then
+		return nil
+	end
+	if ListInClassMode then
+		local child = GetChildMenu(ClassMenu)
+		return child and child:IsValid() and child or nil
+	end
+	return ClassMenu
+end
+
+function SetSaveEditFocus(aFocus)
+	if ClassMenu and ClassMenu:IsValid() then
+		ClassMenu:GetChildChecked( "SaveBuildTemplate", false ):GetChildChecked( "BuildNameEdit", false ):SetFocus( aFocus )
+	end
+end
 
 function GetMenuItems()
-	local children = ListInClassMode and (GetChildMenu(ClassMenu) and GetChildMenu(ClassMenu):GetNamedChildren() or {}) or ClassMenu:GetNamedChildren()
+	local menu = GetBuildsMenuWidget()
+	local children = menu and menu:GetNamedChildren() or {}
 	table.sort( children,
 		function( a, b )
 			if a:GetName() == "ItemEditTemplate" then return false end
@@ -190,45 +439,69 @@ function onRenameBuild( build )
 		onRenameCancel()
 	end
 
-	
-	RenameBuildIndex = getBuildIndex( build )
-	RenameMenuIndex = ListInClassMode and getBuildIndexByClass(build) or RenameBuildIndex
-	local item = GetMenuItems()[ RenameMenuIndex ]
+	local menu = GetBuildsMenuWidget()
+	local buildIndex = getBuildIndex( build )
+	local menuIndex = ListInClassMode and getBuildIndexByClass(build) or buildIndex
+	local item = menuIndex and GetMenuItems()[ menuIndex ]
+	if not menu or not buildIndex or not item then
+		return
+	end
+	RenameBuildIndex = buildIndex
+	RenameMenuIndex = menuIndex
+
 	item:Show( false )
-	local menu = ListInClassMode and GetChildMenu(ClassMenu) or ClassMenu
 	local edit = menu:GetChildChecked( "ItemEditTemplate", false )
 	edit:SetText( userMods.ToWString( build.name ) )
 	edit:SetPlacementPlain( item:GetPlacementPlain() )
 	edit:Show( true )
 	edit:Enable( true )
 	edit:SetFocus( true )
-	ClassMenu:GetChildChecked( "SaveBuildTemplate", false ):GetChildChecked( "BuildNameEdit", false ):SetFocus( false )
+	SetSaveEditFocus( false )
 end
 
 function onRenameCancel( params )
-	local item = GetMenuItems()[ RenameMenuIndex ]
-	item:Show( true )
+	if not RenameBuildIndex then
+		return
+	end
+	local menuIndex = RenameMenuIndex
+	-- reset before focus change: losing focus triggers onRenameFocus -> onRenameAccept
+	RenameBuildIndex = nil
+	RenameMenuIndex = nil
 
-	local menu = ListInClassMode and GetChildMenu(ClassMenu) or ClassMenu
+	local menu = GetBuildsMenuWidget()
+	if not menu then
+		return
+	end
+	local item = GetMenuItems()[ menuIndex ]
+	if item then
+		item:Show( true )
+	end
 	local edit = menu:GetChildChecked( "ItemEditTemplate", false )
 	edit:Show( false )
 	edit:Enable( false )
 
-	ClassMenu:GetChildChecked( "SaveBuildTemplate", false ):GetChildChecked( "BuildNameEdit", false ):SetFocus( true )
-	RenameBuildIndex = nil
-	RenameMenuIndex = nil
+	SetSaveEditFocus( true )
 end
 
 function onRenameAccept( params )
-	local menu = ListInClassMode and GetChildMenu(ClassMenu) or ClassMenu
-	if not menu:IsValid() then
+	if not RenameBuildIndex then
+		return
+	end
+	local build = BuildsTable[ RenameBuildIndex ]
+	RenameBuildIndex = nil
+	RenameMenuIndex = nil
+
+	local menu = GetBuildsMenuWidget()
+	if not menu or not build then
 		return
 	end
 	local edit = menu:GetChildChecked( "ItemEditTemplate", false )
-	BuildsTable[ RenameBuildIndex ].name = userMods.FromWString( edit:GetText() )
-	SaveBuildsTable()
-	RenameBuildIndex = nil
-	RenameMenuIndex = nil
+	local newName = userMods.FromWString( edit:GetText() )
+	if newName ~= "" then
+		build.name = newName
+		RefreshQuickButton( build )
+		SaveBuildsTable()
+	end
 
 	onShowList(g_lastAoPanelParams)
 	onShowList(g_lastAoPanelParams)
@@ -341,7 +614,7 @@ function OnDndDragTo( params )
 	end
 	local posConverter = common.GetPosConverterParams()
 	local cursorY = params.posY * posConverter.fullVirtualSizeY / posConverter.realSizeY
-	local cursorY = cursorY - DraggedItem:GetParent():GetPlacementPlain().posY
+	cursorY = cursorY - DraggedItem:GetParent():GetPlacementPlain().posY
 
 	local children = GetMenuItems()
 	local childrenPos = {}
@@ -457,6 +730,7 @@ local function onInterfaceToggle(aParams)
 		if not IsBtnInAOPanelNow then
 			ListButton:Show( not aParams.hide )
 		end
+		ShowQuickButtons( not aParams.hide )
 	end
 end
 
@@ -484,6 +758,7 @@ function Init()
 	common.RegisterReactionHandler( onRenameCancel, "RenameCancelReaction" )
 	common.RegisterReactionHandler( onRenameAccept, "RenameBuildReaction" )
 	common.RegisterReactionHandler( onRenameFocus, "RenameFocusChanged" )
+	common.RegisterReactionHandler( onQuickBuild, "QuickBuildReaction" )
 
 	common.RegisterEventHandler( OnDndPick, "EVENT_DND_PICK_ATTEMPT" )
 	
@@ -493,6 +768,8 @@ function Init()
 	common.RegisterEventHandler( OnSlashCommand, "EVENT_UNKNOWN_SLASH_COMMAND" )
 	
 	InitMenu()
+	
+	CreateAllQuickButtons()
 end
 
 Init()

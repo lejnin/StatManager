@@ -107,6 +107,14 @@ function DnD.UpdatePadding( wtWidget, Padding )
 		end
 	end
 end
+
+function DnD.SetDropCallback( wtWidget, aCallback )
+	if not DnD.Widgets then return end
+	local ID = DnD.GetWidgetID( wtWidget )
+	if ID then
+		DnD.Widgets[ ID ].OnDrop = aCallback
+	end
+end
 function DnD.IsDragging()
 	return DnD.Dragging and true or false
 end
@@ -308,6 +316,9 @@ function DnD.StopDragging( fSuccess )
 			SetConfig( dndInfo.CfgName, { posX = DnD.Place.posX, posY = DnD.Place.posY, highPosX = DnD.Place.highPosX, highPosY = DnD.Place.highPosY } )
 		end
 		dndInfo.Initial = { X = DnD.Place.posX, Y = DnD.Place.posY, HX = DnD.Place.highPosX, HY = DnD.Place.highPosY }
+		if dndInfo.OnDrop then
+			dndInfo.OnDrop( DnD.Place )
+		end
 	else
 		dndInfo.wtMovable:SetPlacementPlain( DnD.Reset )
 	end
