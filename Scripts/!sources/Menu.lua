@@ -6,7 +6,7 @@
 --	 onActivate = func,					-- function to be called when the item is clicked
 --	 submenu = { }						-- a submenu to be opened on click. If onActivate is also present
 --	 									-- then	the arrow must be clicked to open submenu
---	 createWidget = function() CreateWidgetByDesc(desc) end	-- custom menu item, no other fields are used
+--	 createWidget = function(aParent) return aParent:CreateChildByDesc(desc) end	-- custom menu item, no other fields are used
 -- }
 --
 -- Usage example:
@@ -89,7 +89,8 @@ function DestroyMenu( menuWidget )
 end
 
 function GetChildMenu(menuWidget)
-	return Actions[ menuWidget:GetInstanceId() ].childMenu
+	local action = menuWidget and Actions[ menuWidget:GetInstanceId() ]
+	return action and action.childMenu
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -250,4 +251,5 @@ function InitMenu()
 	common.RegisterReactionHandler( OnOpenSubmenu, "MenuOpenSubmenuReaction" )
 	common.RegisterReactionHandler( OnOpenSubmenu, "SubmenuMouseOverReaction" )
 	common.RegisterReactionHandler( OnCloseSubmenu, "ItemMouseOverReaction" )
+	common.RegisterReactionHandler( OnCloseSubmenu, "PointReaction" )
 end  

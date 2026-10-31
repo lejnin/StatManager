@@ -1,5 +1,3 @@
-Global("g_myAvatarID", nil)
-
 --------------------------------------------------------------------------------
 -- Profile functions
 --------------------------------------------------------------------------------
@@ -150,10 +148,6 @@ end
 --------------------------------------------------------------------------------
 function LogInfo( ... )
 	common.LogInfo( common.GetAddonName(), unpack( GetStringListByArguments( ... ) ) )
-end
---------------------------------------------------------------------------------
-function LogInfoCommon( ... )
-	common.LogInfo( "common", unpack( GetStringListByArguments( ... ) ) )
 end
 --------------------------------------------------------------------------------
 function LogWarning( ... )

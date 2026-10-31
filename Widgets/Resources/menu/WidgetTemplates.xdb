@@ -21,6 +21,10 @@
 			<name>SaveBuildTemplate</name>
 			<widget href="SaveBuildControl/SaveBuildTemplate.(WidgetPanel).xdb" />
 		</Item>
+		<Item>
+			<name>QuickBuildButton</name>
+			<widget href="QuickBuildButton/QuickBuildButton.(WidgetButton).xdb" />
+		</Item>
 	</items>
 </UIRelatedWidgets>
 

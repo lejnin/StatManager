@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<WidgetButton>
+	<Name>QuickBuildButton</Name>
+	<Priority>4000</Priority>
+	<Visible>false</Visible>
+	<Header>
+		<Prototype href="/Mods/SampleCommon/Button/ButtonRegular.Prototype.(WidgetButton).xdb#xpointer(/WidgetButton)" />
+	</Header>
+	<Placement>
+		<X>
+			<Align>WIDGET_ALIGN_LOW</Align>
+			<Pos>40</Pos>
+			<Size>80</Size>
+		</X>
+		<Y>
+			<Align>WIDGET_ALIGN_LOW</Align>
+			<Pos>0</Pos>
+			<Size>32</Size>
+		</Y>
+	</Placement>
+	<Enabled>true</Enabled>
+	<Variants>
+		<Item>
+			<Reaction>QuickBuildReaction</Reaction>
+			<StateNormal>
+				<FormatFileRef href="QuickBuildButtonText.txt" />
+			</StateNormal>
+		</Item>
+	</Variants>
+</WidgetButton>
